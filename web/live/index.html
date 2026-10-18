@@ -384,6 +384,14 @@
                 下一部 →
               </button>
             </div>
+            <button id="shareVideo" disabled>複製影片連結</button>
+            <input
+              id="shareFallback"
+              readonly
+              hidden
+              aria-label="影片分享連結，請長按或選取複製"
+              style="width: 100%; padding: 10px"
+            />
             <a id="youtube" hidden target="_blank" rel="noopener noreferrer"
               >到 YouTube 觀看 ↗</a
             >
@@ -440,6 +448,63 @@
         dates = new Map(),
         el = (id) => document.getElementById(id);
       const valid = (id) => /^[A-Za-z0-9_-]{11}$/.test(id || "");
+      let pendingVideo = new URL(location.href).searchParams.get("v");
+      if (!valid(pendingVideo)) pendingVideo = null;
+      let selectionAttempted = false;
+      function videoLink(id) {
+        const url = new URL(location.href);
+        url.searchParams.set("v", id);
+        url.hash = "";
+        return url.href;
+      }
+      function updateAddress(id, push = false) {
+        if (!valid(id)) return;
+        const url = videoLink(id);
+        if (url !== location.href)
+          history[push ? "pushState" : "replaceState"](
+            { videoId: id },
+            "",
+            url,
+          );
+      }
+      function selectRequested(ids) {
+        if (!pendingVideo || selectionAttempted || !ids.length) return;
+        selectionAttempted = true;
+        const index = ids.indexOf(pendingVideo);
+        if (index < 0) {
+          pendingVideo = null;
+          el("notice").textContent =
+            "這部影片不在兔兔播放清單中，先顯示清單中的影片。";
+          return;
+        }
+        if (player.getPlaylistIndex?.() !== index) player.playVideoAt(index);
+      }
+      window.addEventListener("popstate", () => {
+        const id = new URL(location.href).searchParams.get("v");
+        pendingVideo = valid(id)
+          ? id
+          : (player?.getPlaylist?.() || [])[0] || null;
+        selectionAttempted = false;
+        selectRequested((player?.getPlaylist?.() || []).filter(valid));
+        void updateTitle();
+      });
+      el("shareVideo").onclick = async () => {
+        const id = pendingVideo || currentId;
+        if (!valid(id)) return;
+        const url = videoLink(id);
+        try {
+          await navigator.clipboard.writeText(url);
+          el("shareFallback").hidden = true;
+          el("notice").textContent = "已複製這部影片的連結，可分享給朋友。";
+        } catch {
+          const input = el("shareFallback");
+          input.value = url;
+          input.hidden = false;
+          input.focus();
+          input.select();
+          el("notice").textContent = "請複製上方已選取的影片連結。";
+        }
+      };
       function dateLabel(id) {
         const raw = dates.get(id);
         if (!raw || Number.isNaN(Date.parse(raw))) return "發布日期待同步";
@@ -464,6 +529,10 @@
           id = new URL(player.getVideoUrl()).searchParams.get("v");
         } catch {}
         if (!valid(id)) return;
+        if (pendingVideo && id !== pendingVideo) return;
+        pendingVideo = null;
+        el("shareVideo").disabled = false;
+        updateAddress(id);
         if (id === currentId) {
           el("currentDate").textContent = dateLabel(id);
           const info = player.getVideoData?.();
@@ -490,6 +559,7 @@
         if (!player) return;
         const ids = (player.getPlaylist() || []).filter(valid),
           key = ids.join(",");
+        selectRequested(ids);
         if (!ids.length || key === rendered) return;
         rendered = key;
         const generation = ++epoch;
@@ -512,6 +582,9 @@
           if (dates.has(id)) date.dateTime = dates.get(id);
           b.append(h, date, img);
           b.onclick = () => {
+            pendingVideo = id;
+            selectionAttempted = true;
+            updateAddress(id, true);
             player.playVideoAt(i);
             el("title").scrollIntoView({ behavior: "smooth", block: "center" });
           };
