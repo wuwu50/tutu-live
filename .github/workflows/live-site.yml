@@ -1,0 +1,42 @@
+name: Rabbit Live website
+on:
+  push:
+    branches: [main]
+    paths:
+      [
+        "web/live/**",
+        "scripts/update-live-titles.mjs",
+        "tests/live-site-check.mjs",
+        ".github/workflows/live-site.yml",
+      ]
+  workflow_dispatch:
+  schedule:
+    - cron: "23 * * * *"
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: rabbit-live-pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: node scripts/update-live-titles.mjs
+      - run: node tests/live-site-check.mjs
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/live
+      - name: Publish website
+        id: deploy
+        uses: actions/deploy-pages@v4
