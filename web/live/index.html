@@ -404,7 +404,7 @@
           <p>影片標題會顯示在播放器上方。下方可以挑選其他影片。</p>
           <div class="note">
             清單會跟著 YouTube
-            更新。新增影片後，按「更新清單」或重新開啟網頁即可。<br /><br />「兔兔直播」是這裡的名字，影片不一定正在即時直播。
+            更新。新影片的標題與日期可能稍後出現，網頁會自動更新；也可按「更新清單」。<br /><br />「兔兔直播」是這裡的名字，影片不一定正在即時直播。
           </div>
         </aside>
       </div>
@@ -423,22 +423,37 @@
       ><span>影片由 YouTube 提供播放</span>
     </footer>
     <script>
-      fetch("./titles.json", { cache: "no-cache" })
-        .then((r) => (r.ok ? r.json() : {}))
-        .then((data) => {
-          for (const [id, title] of Object.entries(data)) {
-            if (/^[A-Za-z0-9_-]{11}$/.test(id)) {
-              if (typeof title === "string") titles.set(id, title);
-              else if (title && typeof title.title === "string") {
-                titles.set(id, title.title);
-                if (title.publishedAt) dates.set(id, title.publishedAt);
-              }
+      let metadataSignature = "";
+      async function refreshMetadata() {
+        try {
+          const response = await fetch("./titles.json", { cache: "no-cache" });
+          if (!response.ok) return;
+          const data = await response.json();
+          if (!data || typeof data !== "object" || Array.isArray(data)) return;
+          const signature = JSON.stringify(data);
+          if (signature === metadataSignature) return;
+          metadataSignature = signature;
+          for (const [id, value] of Object.entries(data)) {
+            if (!/^[A-Za-z0-9_-]{11}$/.test(id)) continue;
+            if (typeof value === "string") titles.set(id, value);
+            else if (value && typeof value.title === "string") {
+              titles.set(id, value.title);
+              if (
+                value.publishedAt &&
+                !Number.isNaN(Date.parse(value.publishedAt))
+              )
+                dates.set(id, value.publishedAt);
             }
           }
           rendered = "";
-          renderList();
-        })
-        .catch(() => {});
+          await renderList();
+          await updateTitle();
+        } catch {}
+      }
+      void refreshMetadata();
+      setInterval(() => {
+        if (document.visibilityState !== "hidden") void refreshMetadata();
+      }, 60000);
       const playlist = "PLNy9F-I7PWD0";
       let player,
         rendered = "",

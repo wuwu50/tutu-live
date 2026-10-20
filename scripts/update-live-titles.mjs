@@ -27,12 +27,65 @@ export function extractDate(html) {
     ? raw
     : null;
 }
+export function mergeMetadata(previous, incoming) {
+  const result = {};
+  for (const source of [previous, incoming]) {
+    if (!source || typeof source !== "object" || Array.isArray(source))
+      continue;
+    for (const [id, raw] of Object.entries(source)) {
+      if (!validId(id)) continue;
+      const value = typeof raw === "string" ? { title: raw } : raw;
+      if (!value || typeof value !== "object") continue;
+      const old = result[id] || {};
+      const title =
+        typeof value.title === "string" && value.title.trim()
+          ? value.title
+          : old.title;
+      if (!title) continue;
+      const date =
+        typeof value.publishedAt === "string" &&
+        /^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value.publishedAt) &&
+        !Number.isNaN(Date.parse(value.publishedAt))
+          ? value.publishedAt
+          : old.publishedAt || null;
+      result[id] = { title, publishedAt: date };
+    }
+  }
+  return result;
+}
+export async function readPublicationDate(id, request = fetch) {
+  if (!validId(id)) throw Error("Invalid video ID");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await request(
+        "https://www.youtube.com/watch?v=" + id + (attempt ? "&hl=en" : ""),
+        { signal: AbortSignal.timeout(15000) },
+      );
+      if (!response.ok) continue;
+      const date = extractDate(await response.text());
+      if (date) return date;
+    } catch {}
+  }
+  return null;
+}
 export async function updateTitles() {
   const target = "web/live/titles.json";
   let previous = {};
   try {
     previous = JSON.parse(fs.readFileSync(target, "utf8"));
   } catch {}
+  try {
+    const published = await fetch(
+      "https://wuwu50.github.io/tutu-live/titles.json",
+      { signal: AbortSignal.timeout(10000), cache: "no-store" },
+    );
+    if (published.ok)
+      previous = mergeMetadata(previous, await published.json());
+  } catch {
+    console.warn("Published metadata unavailable; keeping repository cache");
+  }
+  previous = mergeMetadata({}, previous);
+  fs.writeFileSync(target, JSON.stringify(previous, null, 2) + "\n");
   const response = await fetch(
     "https://www.youtube.com/playlist?list=PLNy9F-I7PWD0",
     { signal: AbortSignal.timeout(20000) },
@@ -53,11 +106,7 @@ export async function updateTitles() {
         old = previous[id];
       const saved = typeof old === "string" ? { title: old } : old || {};
       try {
-        const page = await fetch("https://www.youtube.com/watch?v=" + id, {
-          signal: AbortSignal.timeout(15000),
-        });
-        if (!page.ok) throw Error("HTTP " + page.status);
-        const publishedAt = extractDate(await page.text());
+        const publishedAt = await readPublicationDate(id);
         result[id] = {
           ...info,
           publishedAt: publishedAt || saved.publishedAt || null,
@@ -70,7 +119,14 @@ export async function updateTitles() {
   await Promise.all(
     Array.from({ length: Math.min(4, entries.length) }, worker),
   );
-  fs.writeFileSync(target, JSON.stringify(result, null, 2) + "\n");
+  fs.writeFileSync(
+    target,
+    JSON.stringify(
+      Object.fromEntries(entries.map(([id]) => [id, result[id]])),
+      null,
+      2,
+    ) + "\n",
+  );
   console.log(
     "Updated " +
       entries.length +

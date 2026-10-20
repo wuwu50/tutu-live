@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
-import { collectVideos, extractDate } from "../scripts/update-live-titles.mjs";
+import {
+  collectVideos,
+  extractDate,
+  mergeMetadata,
+  readPublicationDate,
+} from "../scripts/update-live-titles.mjs";
 assert.equal(
   collectVideos({
     lockupViewModel: {
@@ -149,3 +154,52 @@ assert(el("shareFallback").value.includes("?v=" + ids[0]));
 console.log(
   "PASS share links: selected video URL, clipboard, history navigation, unknown-video guard, manual-copy fallback",
 );
+
+const retained = mergeMetadata(
+  {
+    abcdefghijk: { title: "舊標題", publishedAt: "2026-10-17T08:45:41-07:00" },
+  },
+  {
+    abcdefghijk: { title: "新標題", publishedAt: null },
+    bad: { title: "不合法" },
+    newvideo123: { title: "新影片", publishedAt: "不是日期" },
+  },
+);
+assert.equal(retained.abcdefghijk.publishedAt, "2026-10-17T08:45:41-07:00");
+assert.equal(retained.abcdefghijk.title, "新標題");
+assert(!retained.bad);
+assert.equal(retained.newvideo123.publishedAt, null);
+let attempts = 0;
+const recovered = await readPublicationDate("abcdefghijk", async () => ({
+  ok: true,
+  text: async () =>
+    ++attempts === 1
+      ? "missing metadata"
+      : '"publishDate":"2026-10-20T11:46:07-07:00"',
+}));
+assert.equal(attempts, 2);
+assert.equal(recovered, "2026-10-20T11:46:07-07:00");
+assert.equal(
+  await readPublicationDate("abcdefghijk", async () => {
+    throw Error("network");
+  }),
+  null,
+);
+await assert.rejects(
+  readPublicationDate("../bad", async () => {
+    throw Error("must not request");
+  }),
+  /Invalid video/,
+);
+console.log(
+  "PASS sync recovery: published cache merge, no null-date regression, unknown-date honesty and bounded retry",
+);
+
+context.fetch=async()=>({ok:true,json:async()=>({...cache,abcdefghijk:{title:'剛上傳的兔兔影片',publishedAt:'2026-10-20T11:46:07-07:00'}})});
+await vm.runInContext('refreshMetadata()',context);
+assert.equal(el('cards').children.at(-1).children[0].textContent,'剛上傳的兔兔影片');
+assert.equal(el('cards').children.at(-1).children[1].textContent,'發布日期：2026/10/21');
+context.fetch=async()=>({ok:true,json:async()=>({...cache,abcdefghijk:{title:'剛上傳的兔兔影片',publishedAt:null}})});
+await vm.runInContext('refreshMetadata()',context);
+assert.equal(el('cards').children.at(-1).children[1].textContent,'發布日期：2026/10/21');
+console.log('PASS live page refresh: new metadata appears without reload and preserves known dates');
